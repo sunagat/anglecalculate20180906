@@ -1,0 +1,253 @@
+// OpenPose関節点データの読み込み、角度計算、結果画像の生成　//
+
+#include "stdafx.h"
+
+#define _CRT_SECURE_NO_WARNINGS
+#define _USE_MATH_DEFINES
+#include <string>
+#include <cmath>
+#include <opencv2/opencv.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+
+#include "picojson.h"
+#include <fstream>
+#include <iostream>
+#include <cassert>
+#include <time.h>
+#include <stdio.h>
+#include <math.h>
+
+#define PI 3.14159
+
+double calclate_deg(double x1, double x2, double x3, double y1, double y2, double y3);
+void result_img(double x1, double x2, double x3, double y1, double y2, double y3);
+int Hough(void);
+int get_points(double P[75]);
+
+using namespace std;
+using namespace picojson;
+
+string win_canny = "canny";
+string win_calc = "parameter";
+string win_result = "result";
+
+double bed_line[4] = { 0 };
+char fname[10];
+int flag = 0;	//0:腰 1:膝 2:足
+
+int main(int argc,char *argv[]) {
+	double P[75] = { 0 };
+	int i = 0,result = 0;
+	double x,y;
+	double angle,angle2;
+
+	if(argc != 2)
+	{
+		cout << "Error! This program needs [FilePath]_[Num].";
+		return 0;
+	}
+
+	//引数をflagに格納
+	flag = atoi(argv[1]);
+
+	//検出点データの取得
+	get_points(P);
+
+	//引数から測定対象の関節を判断し、角度を計算する。
+	switch (flag) {
+	case 1:
+		Hough();
+
+		angle = (180.0 - calclate_deg(bed_line[2] + P[36] - bed_line[0], P[36], P[39], bed_line[3] + P[37] - bed_line[1], P[37], P[40]));
+		//足が左右逆に検出された場合の対策
+		angle2 = (180.0 - calclate_deg(bed_line[2] + P[27] - bed_line[0], P[27], P[30], bed_line[3] + P[28] - bed_line[1], P[28], P[31]));
+
+		if (angle2 > angle){
+			angle = angle2;
+			result_img(bed_line[2] + P[27] - bed_line[0], P[27], P[30], bed_line[3] + P[28] - bed_line[1], P[28], P[31]);
+		}
+		else result_img(bed_line[2] + P[36] - bed_line[0], P[36], P[39], bed_line[3] + P[37] - bed_line[1], P[37], P[40]);
+		break;
+
+	case 2:
+		angle = (180.0 - calclate_deg(P[36], P[39], P[42], P[37], P[40], P[43]));
+		result_img(P[36], P[39], P[42], P[37], P[40], P[43]);
+		break;
+
+	case 3:
+		angle= (90.0 - calclate_deg(P[57], P[63], P[39], P[58], P[64], P[40]));
+		result_img(P[60], P[63], P[39], P[61], P[64], P[40]);
+		break;
+	case 6:
+		angle = -(90.0 - calclate_deg(P[57], P[63], P[39], P[58], P[64], P[40]));
+		result_img(P[60], P[63], P[39], P[61], P[64], P[40]);
+		break;
+	default:
+		cout << "Error! Comands not found.";
+		break;
+	}
+	cv::destroyAllWindows();
+
+	result = (int)angle;
+	return result;
+}
+
+//データの読み込み
+int get_points(double Point[75])
+{
+	int n = 0;
+
+	value root;
+	{
+		ifstream stream("C:\\openpose-build\\x64\\result_json\\001_keypoints.json");
+		if (!stream.is_open()) return 1;
+
+		stream >> root;
+		assert(get_last_error().empty());
+	}
+	value::array people = root.get<object>()["people"].get<value::array>();
+	value::array keypoints = people[0].get<object>()["pose_keypoints_2d"].get<value::array>();
+
+	//Point[]にデータを順番に格納
+	for (value item : keypoints) {
+		Point[n] = item.get<double>();
+		n++;
+	}
+
+	return 0;
+}
+
+//3点の座標値から、角度を計算する
+double calclate_deg(double x1, double x2, double x3, double y1, double y2, double y3)
+{
+	double ax, ay, bx, by;
+	double cosin, theta;
+
+	ax = x1 - x2;
+	ay = y1 - y2;
+	bx = x3 - x2;
+	by = y3 - y2;
+
+	cosin = (ax * bx + ay * by) / (sqrt(ax * ax + ay * ay) * sqrt(bx * bx + by * by));
+	theta = acos(cosin) * 180 / PI;
+
+	return theta;
+}
+
+//3点の座標値から直線を描画し、結果画像を生成する
+void result_img(double x1, double x2, double x3, double y1, double y2, double y3)
+{
+	time_t now = time(NULL);
+	struct tm nowtime;
+	int year, month, day;
+	int hour, minute, second;
+	errno_t error;
+	ostringstream oss;
+
+	cv::Mat resize_img1;
+
+	//測定対象の画像はこのディレクトリにコピーされている
+	cv::Mat img1 = cv::imread("C:\\openpose-build\\x64\\newmedia\\001.jpg", 1);
+
+	if (!img1.data)
+	{
+		cout << "Picture is not exist." << endl;
+	}
+	else
+	{
+		cv::namedWindow("WINDOW", cv::WINDOW_AUTOSIZE);
+		
+		if (flag == 1 || flag == 2)	//股関節・膝関節を選択した際の直線描画処理
+		{
+			cv::line(img1, cv::Point((int)x1, (int)y1), cv::Point((int)x2, (int)y2), cv::Scalar(0, 255, 0), 12, 4);
+			cv::line(img1, cv::Point((int)x2, (int)y2), cv::Point((int)x3, (int)y3), cv::Scalar(0, 255, 255), 12, 4);
+			cv::line(img1, cv::Point((int)(x2 - (x1 - x2)), (int)(y2 - (y1 - y2))), cv::Point((int)x2, (int)y2), cv::Scalar(0, 255, 0), 12, 4);
+		}
+		if (flag == 3 || flag == 6)//足関節を選択した際の直線描画処理
+		{
+			double x, y;
+			x = x2 + (y3 - y2);
+			y = y2 - (x3 - x2);
+
+			cv::line(img1, cv::Point((int)x1, (int)y1), cv::Point((int)x2, (int)y2), cv::Scalar(0, 255, 255), 12, 4);
+			cv::line(img1, cv::Point((int)x2, (int)y2), cv::Point((int)x3, (int)y3), cv::Scalar(0, 255, 0), 12, 4);
+			cv::line(img1, cv::Point((int)x2, (int)y2), cv::Point((int)x, (int)y), cv::Scalar(0 , 255 , 0), 12, 4);
+		}
+
+		//画像サイズを縮小
+		cv::resize(img1, resize_img1, cv::Size(), 0.3, 0.3);
+
+		//現在時刻を表す文字列を画像名として、画像を保存
+		time(&now);
+		error = localtime_s(&nowtime,&now);
+
+		year	= (nowtime.tm_year + 1900) * 10000000000;
+		month	= (nowtime.tm_mon + 1) * 100000000;
+		day		= (nowtime.tm_mday * 1000000);
+		hour	= (nowtime.tm_hour * 10000);
+		minute	= (nowtime.tm_min * 100);
+		second	= nowtime.tm_sec;
+
+		oss << year + month + day + hour + minute + second << flush;
+
+		cv::imwrite("C:\\openpose-build\\x64\\result_picture\\"+oss.str()+".bmp",img1);
+	}
+}
+
+//Hough直線変換によるベッド検出
+int Hough(void)
+{
+	//処理に用いるパラメータ
+	int Canny_th1 = 0;
+	int Canny_th2 = 90;
+	int Hough_th = 400;
+	int minLength = 1000;
+	int maxGap = 1000;
+
+	int y_abs = 0,num;
+	double abs_ave, near;
+	double min = 2000;
+
+	cv::Mat copy_img, canny_GRAY;
+	cv::Mat img = cv::imread("C:\\openpose-build\\x64\\newmedia\\001.jpg", 1);
+	if (!img.data)
+	{
+		cout << "画像が存在しません" << endl;
+		return 1;
+	}
+
+	vector<cv::Vec4i> lines;
+
+	img.copyTo(copy_img);
+
+	cv::Canny(copy_img, canny_GRAY, Canny_th1, Canny_th2);	//Cannyエッジ検出
+	cv::HoughLinesP(canny_GRAY, lines, 1, CV_PI / 180, Hough_th, minLength, maxGap);	//Hough直線検出
+
+	//画像内の位置から直線の絞り込み
+	for (size_t i = 0; i < lines.size(); i++){
+		if ((lines[i][0] >= 0 && lines[i][0] <= 1200) && (lines[i][1] >= 1100 && lines[i][1] <= 1600)) {
+			if ((lines[i][2] >= 2200 && lines[i][2] <= 3500) && (lines[i][3] >= 1100 && lines[i][3] <= 1600)) {
+				y_abs += abs(lines[i][1] - lines[i][3]);
+			}
+		}
+	}
+	abs_ave = ((double)y_abs / (double)lines.size());
+
+	//直線の傾き平均から直線の絞り込み
+	for (size_t i = 0; i < lines.size(); i++){
+		if ((lines[i][0] >= 0 && lines[i][0] <= 1200) && (lines[i][1] >= 1100 && lines[i][1] <= 1600)) {
+			if ((lines[i][2] >= 2200 && lines[i][2] <= 3500) && (lines[i][3] >= 1100 && lines[i][3] <= 1600)) {
+				near = abs(abs_ave - (double)(abs(lines[i][1] - lines[i][3])));
+				if (near < min) {
+					min = near;
+					for (int j = 0; j < 4; j++) {
+						bed_line[j] = lines[i][j];
+						num = i;
+					}
+				}
+			}
+		}
+	}
+	return 0;
+}
